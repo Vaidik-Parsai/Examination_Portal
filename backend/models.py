@@ -101,6 +101,7 @@ class ExamSlot(db.Model):
     status = db.Column(db.String(20), default='available')
     meeting_link = db.Column(db.String(255))
     bookings = db.relationship('Booking', backref='slot', lazy=True)
+Slot = ExamSlot
 
 class Booking(db.Model):
     __tablename__ = 'bookings'

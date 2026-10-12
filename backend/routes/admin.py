@@ -4,7 +4,7 @@ Handles: Dashboard, Courses, Exams, Rubrics, Examiner creation.
 """
 import uuid
 from datetime import datetime
-from flask import Blueprint, request
+from flask import Blueprint, request, abort
 from flask_restful import Api, Resource
 from flask_security import auth_required, roles_required
 from flask_security.utils import hash_password
@@ -320,6 +320,184 @@ class ExaminerListResource(Resource):
         db.session.commit()
 
         return {"message": "Examiner created", "id": examiner_profile.id}, 201
+class ExamSlotListResource(Resource):
+    """GET = list all slots; POST = create a new slot for an examination."""
+
+    @auth_required('token')
+    @roles_required('admin')
+    def get(self, exam_id):
+        slots = ExamSlot.query.filter_by(examination_id=exam_id).all()
+        result = []
+        for s in slots:
+            result.append({
+                'id': s.id,
+                'examiner_id': s.examiner_id,
+                'date': s.date.isoformat(),
+                'start_time': s.start_time.isoformat(),
+                'end_time': s.end_time.isoformat(),
+                'max_capacity': s.max_capacity,
+                'available_seats': s.available_seats,
+                'status': s.status,
+                'meeting_link': s.meeting_link
+            })
+        return {'slots': result}
+
+    @auth_required('token')
+    @roles_required('admin')
+    def post(self, exam_id):
+        from datetime import time as dt_time
+        data = request.get_json(force=True)
+        # Required fields
+        date_str = data.get('date')
+        start_str = data.get('start_time')
+        end_str = data.get('end_time')
+        max_capacity = data.get('max_capacity')
+        examiner_id = data.get('examiner_id')
+        if not all([date_str, start_str, end_str, max_capacity, examiner_id]):
+            return {"message": "date, start_time, end_time, max_capacity, examiner_id are required."}, 400
+        exam = Examination.query.get_or_404(exam_id)
+        examiner = ExaminerProfile.query.get_or_404(examiner_id)
+        try:
+            # Parse date (e.g. "2026-10-12")
+            slot_date = datetime.fromisoformat(date_str).date()
+            # Parse time — handle bare time strings like "10:00:00"
+            def parse_time(t_str):
+                parts = t_str.strip().split(':')
+                parts = [int(p) for p in parts]
+                if len(parts) == 2:
+                    return dt_time(parts[0], parts[1])
+                elif len(parts) == 3:
+                    return dt_time(parts[0], parts[1], parts[2])
+                else:
+                    raise ValueError(f"Cannot parse time: {t_str}")
+            start_time = parse_time(start_str)
+            end_time = parse_time(end_str)
+        except Exception as e:
+            return {"message": f"Invalid date or time format: {str(e)}"}, 400
+        slot = ExamSlot(
+            examination_id=exam_id,
+            examiner_id=examiner_id,
+            date=slot_date,
+            start_time=start_time,
+            end_time=end_time,
+            max_capacity=max_capacity,
+            available_seats=max_capacity,
+            status='available',
+            meeting_link=data.get('meeting_link')
+        )
+        db.session.add(slot)
+        db.session.commit()
+        return {'message': 'Slot created', 'id': slot.id}, 201
+
+class SlotResource(Resource):
+    """PUT = update slot; DELETE = remove slot (if no bookings)"""
+
+    @auth_required('token')
+    @roles_required('admin')
+    def put(self, slot_id):
+        slot = ExamSlot.query.get_or_404(slot_id)
+        data = request.get_json(force=True)
+        if 'date' in data:
+            try:
+                slot.date = datetime.fromisoformat(data['date']).date()
+            except Exception:
+                abort(400, 'Invalid date format')
+        if 'start_time' in data:
+            try:
+                slot.start_time = datetime.fromisoformat(data['start_time']).time()
+            except Exception:
+                abort(400, 'Invalid start_time format')
+        if 'end_time' in data:
+            try:
+                slot.end_time = datetime.fromisoformat(data['end_time']).time()
+            except Exception:
+                abort(400, 'Invalid end_time format')
+        if 'max_capacity' in data:
+            new_capacity = data['max_capacity']
+            booked = slot.max_capacity - slot.available_seats
+            if new_capacity < booked:
+                abort(400, 'New capacity cannot be less than already booked seats')
+            slot.max_capacity = new_capacity
+            slot.available_seats = new_capacity - booked
+        if 'examiner_id' in data:
+            ExaminerProfile.query.get_or_404(data['examiner_id'])
+            slot.examiner_id = data['examiner_id']
+        if 'status' in data:
+            slot.status = data['status']
+        if 'meeting_link' in data:
+            slot.meeting_link = data['meeting_link']
+        db.session.commit()
+        return {'message': 'Slot updated'}
+
+    @auth_required('token')
+    @roles_required('admin')
+    def delete(self, slot_id):
+        slot = ExamSlot.query.get_or_404(slot_id)
+        if slot.bookings:
+            abort(400, 'Cannot delete a slot that has bookings')
+        db.session.delete(slot)
+        db.session.commit()
+        return {'message': 'Slot deleted'}
+
+class AdminExamExportResource(Resource):
+    """POST = Trigger asynchronous CSV export for examination results.
+       GET = List or download exports for an examination."""
+
+    @auth_required('token')
+    @roles_required('admin')
+    def post(self, exam_id):
+        exam = Examination.query.get_or_404(exam_id)
+        from tasks import export_exam_results_csv
+        task_res = export_exam_results_csv.delay(exam.id)
+        response = {
+            "message": "Export initiated",
+            "task_id": task_res.id,
+            "status": task_res.status
+        }
+        if task_res.ready():
+            response["result"] = task_res.get()
+        return response, 202
+
+    @auth_required('token')
+    @roles_required('admin')
+    def get(self, exam_id):
+        exam = Examination.query.get_or_404(exam_id)
+        import os
+        from app import app
+        from flask import send_file
+
+        exports_dir = os.path.join(app.config['BASE_DIR'], 'exports')
+        if not os.path.exists(exports_dir):
+            return {"examination_id": exam.id, "exports": []}
+
+        files = [f for f in os.listdir(exports_dir) if f.startswith(f"exam_{exam.id}_results_") and f.endswith(".csv")]
+        files.sort(reverse=True)
+
+        if request.args.get('download') == 'true' and files:
+            latest_path = os.path.join(exports_dir, files[0])
+            return send_file(latest_path, as_attachment=True, download_name=files[0])
+
+        return {
+            "examination_id": exam.id,
+            "exam_name": exam.name,
+            "exports": files
+        }
+
+class AdminTaskTriggerResource(Resource):
+    """POST = Manually trigger Celery background tasks (reminders or daily report)."""
+
+    @auth_required('token')
+    @roles_required('admin')
+    def post(self, task_name):
+        from tasks import send_slot_reminders, generate_daily_admin_report
+        if task_name == 'reminders':
+            task = send_slot_reminders.delay()
+            return {"message": "Slot reminders task triggered", "task_id": task.id, "result": task.get() if task.ready() else None}
+        elif task_name == 'daily-report':
+            task = generate_daily_admin_report.delay()
+            return {"message": "Daily admin report task triggered", "task_id": task.id, "result": task.get() if task.ready() else None}
+        else:
+            abort(400, "Unknown task_name. Valid: 'reminders', 'daily-report'")
 
 # ==========================================
 # REGISTER ALL ADMIN RESOURCES
@@ -332,3 +510,7 @@ admin_api.add_resource(ExamResource, '/api/admin/exams/<int:exam_id>')
 admin_api.add_resource(RubricListResource, '/api/admin/exams/<int:exam_id>/rubrics')
 admin_api.add_resource(RubricResource, '/api/admin/rubrics/<int:rubric_id>')
 admin_api.add_resource(ExaminerListResource, '/api/admin/examiners')
+admin_api.add_resource(ExamSlotListResource, '/api/admin/exams/<int:exam_id>/slots')
+admin_api.add_resource(SlotResource, '/api/admin/slots/<int:slot_id>')
+admin_api.add_resource(AdminExamExportResource, '/api/admin/exams/<int:exam_id>/export')
+admin_api.add_resource(AdminTaskTriggerResource, '/api/admin/tasks/<string:task_name>')

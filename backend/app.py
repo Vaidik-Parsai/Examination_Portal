@@ -28,14 +28,18 @@ class Config:
     WTF_CSRF_ENABLED = False
     SECURITY_CSRF_IGNORE_UNAUTH_ENDPOINTS = True
     SECURITY_FLASH_MESSAGES = False
-    SECURITY_URL_PREFIX = '/api/auth'
+    SECURITY_URL_PREFIX = '/api/security'
     SECURITY_REDIRECT_BEHAVIOR = 'spa'
+    SECURITY_TOKEN_AUTHENTICATION_HEADER = 'Authentication-Token'
+    SECURITY_TOKEN_AUTHENTICATION_KEY = '__no_query_token__'  # disable query-string tokens
 
     REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-    CACHE_TYPE = 'RedisCache'
+    CACHE_TYPE = os.getenv('CACHE_TYPE', 'SimpleCache')
     CACHE_REDIS_URL = REDIS_URL
+    CACHE_DEFAULT_TIMEOUT = 300
     CELERY_BROKER_URL = REDIS_URL
-    result_backend = REDIS_URL
+    CELERY_RESULT_BACKEND = REDIS_URL
+    CELERY_TASK_ALWAYS_EAGER = os.getenv('CELERY_ALWAYS_EAGER', 'True').lower() == 'true'
 
 # ==========================================
 # CREATE APP AND EXTENSIONS
@@ -46,12 +50,19 @@ app.config.from_object(Config)
 # Initialize extensions
 db.init_app(app)
 cache = Cache(app)
-celery = Celery(app.name, broker=app.config['CELERY_BROKER_URL'])
-celery.conf.update(app.config)
+celery = Celery(app.name)
+celery.conf.update(
+    broker_url=app.config['CELERY_BROKER_URL'],
+    result_backend=app.config['CELERY_RESULT_BACKEND'],
+    task_always_eager=app.config['CELERY_TASK_ALWAYS_EAGER']
+)
 
 # Setup Flask-Security
 user_datastore = SQLAlchemyUserDatastore(db, User, Role)
 security = Security(app, user_datastore)
+
+# Import Celery background tasks
+import tasks
 
 # ==========================================
 # A simple root route (no blueprint needed)
