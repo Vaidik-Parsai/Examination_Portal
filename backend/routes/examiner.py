@@ -3,7 +3,7 @@ Examiner Routes — Phase 4 implementation.
 Provides slot CRUD, bookings view, evaluation submission, slot completion, and examiner dashboard.
 All endpoints protected by @roles_required('examiner') and @auth_required('token').
 """
-from datetime import datetime
+from datetime import datetime, date, time
 from flask import Blueprint, request, abort
 from flask_restful import Resource, Api
 from flask_security import auth_required, roles_required, current_user
@@ -13,6 +13,26 @@ from models import db, ExamSlot, Booking, Evaluation, Examination, Rubric, Exami
 # Blueprint & API setup
 examiner_bp = Blueprint('examiner', __name__, url_prefix='/api/examiner')
 examiner_api = Api(examiner_bp)
+
+
+def _parse_date(d_str):
+    if not d_str:
+        raise ValueError("Missing date")
+    d_str = str(d_str).strip().split('T')[0]
+    return date.fromisoformat(d_str)
+
+
+def _parse_time(t_str):
+    if not t_str:
+        raise ValueError("Missing time")
+    t_str = str(t_str).strip()
+    parts = t_str.split(':')
+    if len(parts) == 2:
+        return time(int(parts[0]), int(parts[1]))
+    elif len(parts) == 3:
+        sec_parts = parts[2].split('.')
+        return time(int(parts[0]), int(parts[1]), int(sec_parts[0]))
+    return time.fromisoformat(t_str)
 
 
 def _get_examiner_profile():
@@ -105,11 +125,11 @@ class ExaminerSlotListResource(Resource):
             abort(400, "Slot creation window has closed.")
 
         try:
-            slot_date = datetime.fromisoformat(date_str).date()
-            start_time = datetime.fromisoformat(start_str).time()
-            end_time = datetime.fromisoformat(end_str).time()
-        except Exception:
-            abort(400, "Invalid date or time format. Use ISO format (YYYY-MM-DD, HH:MM:SS).")
+            slot_date = _parse_date(date_str)
+            start_time = _parse_time(start_str)
+            end_time = _parse_time(end_str)
+        except Exception as e:
+            abort(400, f"Invalid date or time format: {str(e)}. Use format (YYYY-MM-DD, HH:MM[:SS]).")
 
         slot = ExamSlot(
             examination_id=exam.id,
@@ -144,17 +164,17 @@ class ExaminerSlotResource(Resource):
 
         if 'date' in data:
             try:
-                slot.date = datetime.fromisoformat(data['date']).date()
+                slot.date = _parse_date(data['date'])
             except Exception:
                 abort(400, "Invalid date format.")
         if 'start_time' in data:
             try:
-                slot.start_time = datetime.fromisoformat(data['start_time']).time()
+                slot.start_time = _parse_time(data['start_time'])
             except Exception:
                 abort(400, "Invalid start_time format.")
         if 'end_time' in data:
             try:
-                slot.end_time = datetime.fromisoformat(data['end_time']).time()
+                slot.end_time = _parse_time(data['end_time'])
             except Exception:
                 abort(400, "Invalid end_time format.")
         if 'max_capacity' in data:
@@ -284,8 +304,35 @@ class SlotCompleteResource(Resource):
         return {"message": "Slot marked as completed"}
 
 
+class ExaminerExamListResource(Resource):
+    """GET = List all examinations available for scheduling slots."""
+
+    @auth_required('token')
+    @roles_required('examiner')
+    def get(self):
+        exams = Examination.query.all()
+        result = []
+        for e in exams:
+            result.append({
+                "id": e.id,
+                "course_id": e.course_id,
+                "course_name": e.course.name if e.course else "Unknown Course",
+                "name": e.name,
+                "exam_type": e.exam_type,
+                "duration": e.duration,
+                "max_marks": e.max_marks,
+                "slot_creation_start": str(e.slot_creation_start) if e.slot_creation_start else None,
+                "slot_creation_end": str(e.slot_creation_end) if e.slot_creation_end else None,
+                "booking_start": str(e.booking_start) if e.booking_start else None,
+                "booking_end": str(e.booking_end) if e.booking_end else None,
+                "status": e.status
+            })
+        return {"exams": result}
+
+
 # Register all examiner resources
 examiner_api.add_resource(ExaminerDashboardResource, '/dashboard')
+examiner_api.add_resource(ExaminerExamListResource, '/exams')
 examiner_api.add_resource(ExaminerSlotListResource, '/slots')
 examiner_api.add_resource(ExaminerSlotResource, '/slots/<int:slot_id>')
 examiner_api.add_resource(ExaminerSlotBookingsResource, '/slots/<int:slot_id>/bookings')

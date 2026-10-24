@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from flask import Blueprint, request, abort
 from flask_restful import Api, Resource
-from flask_security import auth_required, roles_required
+from flask_security import auth_required, roles_required, roles_accepted
 from flask_security.utils import hash_password
 
 from models import (
@@ -107,7 +107,7 @@ class CourseResource(Resource):
 # --- Examination CRUD ---
 class ExamListResource(Resource):
     @auth_required('token')
-    @roles_required('admin')
+    @roles_accepted('admin', 'examiner')
     def get(self):
         """List all examinations."""
         exams = Examination.query.all()

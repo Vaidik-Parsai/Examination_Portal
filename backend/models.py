@@ -121,6 +121,7 @@ class Evaluation(db.Model):
     remarks = db.Column(db.Text)
     evaluation_date = db.Column(db.DateTime, default=datetime.utcnow)
     status = db.Column(db.String(20), default='completed')
+    examiner = db.relationship('ExaminerProfile', backref='evaluations', lazy=True)
 
 def init_roles_and_admin(user_datastore):
     """Programmatically seed roles and the default admin."""

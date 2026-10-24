@@ -182,11 +182,14 @@ class StudentEvaluationListResource(Resource):
             booking = e.booking
             slot = booking.slot if booking else None
             exam = slot.examination if slot else None
+            examiner = getattr(e, 'examiner', None) or (slot.examiner if slot else None)
+            examiner_user = examiner.user if examiner and examiner.user else None
             result.append({
                 'id': e.id,
                 'booking_id': e.booking_id,
                 'exam_name': exam.name if exam else None,
-                'examiner_name': e.examiner.user.name if e.examiner and e.examiner.user else None,
+                'course_name': exam.course.name if exam and exam.course else None,
+                'examiner_name': examiner_user.name if examiner_user else None,
                 'total_marks': e.total_marks,
                 'remarks': e.remarks,
                 'status': e.status,

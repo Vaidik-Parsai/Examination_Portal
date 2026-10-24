@@ -178,7 +178,7 @@ const loadDashboard = async () => {
     const [dashData, slotData, examData] = await Promise.all([
       api.get('/api/examiner/dashboard'),
       api.get('/api/examiner/slots'),
-      api.get('/api/admin/exams').catch(() => ({ exams: [] }))
+      api.get('/api/examiner/exams').catch(() => api.get('/api/admin/exams')).catch(() => ({ exams: [] }))
     ]);
     stats.value = dashData.stats || {};
     slots.value = slotData.slots || [];

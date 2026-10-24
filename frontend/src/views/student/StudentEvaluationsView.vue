@@ -32,8 +32,11 @@
         </thead>
         <tbody>
           <tr v-for="e in evaluations" :key="e.id">
-            <td><strong>{{ e.exam_name || `Booking #${e.booking_id}` }}</strong></td>
-            <td>{{ e.examiner_name ? `Prof. ${e.examiner_name}` : `Examiner #${e.examiner_id}` }}</td>
+            <td>
+              <strong>{{ e.exam_name || `Booking #${e.booking_id}` }}</strong>
+              <div v-if="e.course_name" class="course-subtitle">{{ e.course_name }}</div>
+            </td>
+            <td>{{ e.examiner_name ? `Prof. ${e.examiner_name}` : `Examiner #${e.examiner_id || ''}` }}</td>
             <td>
               <span class="marks-pill">{{ e.total_marks }} pts</span>
             </td>
@@ -116,6 +119,12 @@ onMounted(() => {
   color: var(--text-muted);
   line-height: 1.4;
   font-size: 0.9rem;
+}
+
+.course-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
 }
 
 .alert {

@@ -30,6 +30,7 @@
             <th>Timing</th>
             <th>Meeting Link</th>
             <th>Status</th>
+            <th>Result</th>
           </tr>
         </thead>
         <tbody>
@@ -49,6 +50,12 @@
               <span :class="['badge', b.status === 'completed' ? 'badge-success' : 'badge-student']">
                 {{ b.status }}
               </span>
+            </td>
+            <td>
+              <router-link v-if="b.status === 'completed'" to="/student/evaluations" class="btn btn-secondary btn-sm">
+                View Result 🏆
+              </router-link>
+              <span v-else class="text-faint">—</span>
             </td>
           </tr>
         </tbody>
