@@ -47,6 +47,13 @@
               <div class="action-buttons">
                 <button @click="openRubricsModal(e)" class="btn btn-secondary btn-sm">Rubrics</button>
                 <button @click="openEditExamModal(e)" class="btn btn-secondary btn-sm">Edit</button>
+                <button
+                  @click="toggleExamBooking(e)"
+                  :class="['btn btn-sm', e.status === 'closed' ? 'btn-success' : 'btn-warning']"
+                  :title="e.status === 'closed' ? 'Reopen booking for this exam' : 'Close booking for this exam'"
+                >
+                  {{ e.status === 'closed' ? 'Open Booking' : 'Close Booking' }}
+                </button>
               </div>
             </td>
           </tr>
@@ -319,6 +326,16 @@ const saveExam = async () => {
     showFeedback(err.message || 'Failed to save examination.', true);
   } finally {
     submitting.value = false;
+  }
+};
+
+const toggleExamBooking = async (exam) => {
+  try {
+    const res = await api.post(`/api/admin/exams/${exam.id}/toggle-booking`, {});
+    exam.status = res.status;
+    showFeedback(res.message || 'Exam booking toggled.');
+  } catch (err) {
+    showFeedback(err.message || 'Failed to toggle exam booking.', true);
   }
 };
 

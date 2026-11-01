@@ -1,8 +1,3 @@
-"""
-app.py — The main entry point.
-Responsibilities: Config, extension init, blueprint registration, DB seeding.
-All route logic lives in the routes/ folder.
-"""
 import os
 from flask import Flask
 from flask_restful import Api, Resource
@@ -11,10 +6,12 @@ from celery import Celery
 from flask_security import Security, SQLAlchemyUserDatastore
 
 from models import db, User, Role, init_roles_and_admin
+from routes.auth import auth_bp
+from routes.admin import admin_bp
+from routes.examiner import examiner_bp
+from routes.student import student_bp
 
-# ==========================================
-# CONFIG
-# ==========================================
+
 class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'super-secret-key-change-in-prod')
     DEBUG = os.getenv('FLASK_DEBUG', '1') == '1'
@@ -22,7 +19,6 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', f"sqlite:///{os.path.join(BASE_DIR, '..', 'examination.db')}")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    # Flask-Security settings
     SECURITY_PASSWORD_HASH = 'bcrypt'
     SECURITY_PASSWORD_SALT = os.getenv('SECURITY_PASSWORD_SALT', 'somesalt')
     WTF_CSRF_ENABLED = False
@@ -30,8 +26,6 @@ class Config:
     SECURITY_FLASH_MESSAGES = False
     SECURITY_URL_PREFIX = '/api/security'
     SECURITY_REDIRECT_BEHAVIOR = 'spa'
-    SECURITY_TOKEN_AUTHENTICATION_HEADER = 'Authentication-Token'
-    SECURITY_TOKEN_AUTHENTICATION_KEY = '__no_query_token__'  # disable query-string tokens
 
     REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
     CACHE_TYPE = os.getenv('CACHE_TYPE', 'SimpleCache')
@@ -41,9 +35,7 @@ class Config:
     CELERY_RESULT_BACKEND = REDIS_URL
     CELERY_TASK_ALWAYS_EAGER = os.getenv('CELERY_ALWAYS_EAGER', 'True').lower() == 'true'
 
-# ==========================================
-# CREATE APP AND EXTENSIONS
-# ==========================================
+
 app = Flask(__name__)
 app.config.from_object(Config)
 
@@ -57,43 +49,33 @@ celery.conf.update(
     task_always_eager=app.config['CELERY_TASK_ALWAYS_EAGER']
 )
 
-# Setup Flask-Security
 user_datastore = SQLAlchemyUserDatastore(db, User, Role)
 security = Security(app, user_datastore)
 
-# Import Celery background tasks
+# Load background tasks
 import tasks
 
-# ==========================================
-# A simple root route (no blueprint needed)
-# ==========================================
+
 class HomeResource(Resource):
     def get(self):
-        return {"status": "success", "message": "Welcome to the Examination Portal API!"}
+        return {"status": "success", "message": "Examination Portal API"}
+
 
 home_api = Api(app)
 home_api.add_resource(HomeResource, '/')
 
-# ==========================================
-# REGISTER BLUEPRINTS (one per role)
-# ==========================================
-from routes.auth import auth_bp
-from routes.admin import admin_bp
-from routes.examiner import examiner_bp
-from routes.student import student_bp
+# Register role blueprints
+app.register_blueprint(auth_bp)
+app.register_blueprint(admin_bp)
+app.register_blueprint(examiner_bp)
+app.register_blueprint(student_bp)
 
-app.register_blueprint(auth_bp)      # /api/auth/student/register
-app.register_blueprint(admin_bp)     # /api/admin/...
-app.register_blueprint(examiner_bp)  # /api/examiner/...
-app.register_blueprint(student_bp)   # /api/student/...
 
-# ==========================================
-# DB INIT AND RUN
-# ==========================================
 def init_db():
     with app.app_context():
         db.create_all()
         init_roles_and_admin(user_datastore)
+
 
 if __name__ == '__main__':
     init_db()

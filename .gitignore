@@ -1,2 +1,26 @@
-venv
-examination.db
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Database
+*.db
+*.sqlite3
+
+# Node / Frontend
+node_modules/
+dist/
+npm-debug.log*
+
+# Generated artifacts & logs
+backend/reports/*.json
+backend/reports/*.csv
+*.log
+
+# Editor & OS artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,3 @@
+Booking ID,Student Name,Student Email,Course Code,Course Name,Exam Name,Slot Date,Slot Start Time,Slot End Time,Examiner Name,Total Marks,Max Marks,Remarks,Evaluation Date,Booking Status
+1,Connor price ,connor@student.com,CS2001,Modern Application Development 1,End Term Viva ,2026-10-21,10:00:00,11:00:00,Dr Smith,Pending,100,,N/A,booked
+2,Connor price ,connor@student.com,CS2001,Modern Application Development 1,End Term Viva ,2026-11-15,10:00:00,11:00:00,Mr Joseph,75,100,great knowledge,2026-10-19T18:28:55.692249,completed

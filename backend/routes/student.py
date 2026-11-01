@@ -1,12 +1,5 @@
 """
-Student Routes — Phase 5 implementation.
-Provides:
-- GET /api/student/dashboard : student statistics
-- GET /api/student/slots : list open exam slots available for booking
-- POST /api/student/slots : book an available slot
-- GET /api/student/bookings : list current student's bookings
-- GET /api/student/evaluations : list current student's evaluations
-All endpoints protected by @roles_required('student') and @auth_required('token').
+Student endpoints: available slot booking, booking history, and exam evaluations.
 """
 from datetime import datetime
 from flask import Blueprint, request, abort
@@ -67,6 +60,8 @@ class StudentSlotListResource(Resource):
 
             exam = s.examination
             if exam:
+                if exam.status == 'closed':
+                    continue
                 if exam.booking_start and now < exam.booking_start:
                     continue
                 if exam.booking_end and now > exam.booking_end:
@@ -108,6 +103,8 @@ class StudentSlotListResource(Resource):
         exam = slot.examination
         now = datetime.utcnow()
         if exam:
+            if exam.status == 'closed':
+                abort(400, "Booking for this examination is currently closed by the administrator.")
             if exam.booking_start and now < exam.booking_start:
                 abort(400, "Booking for this examination has not opened yet.")
             if exam.booking_end and now > exam.booking_end:

@@ -40,9 +40,15 @@
         </div>
 
         <!-- Task Log Output -->
-        <div v-if="lastTaskResult" class="task-log-box">
-          <strong>Latest Task Execution Result:</strong>
-          <pre>{{ JSON.stringify(lastTaskResult, null, 2) }}</pre>
+        <div v-if="lastTaskResult" class="alert alert-info py-2 px-3 mt-3">
+          <div class="fw-bold mb-1">Execution Status: {{ lastTaskResult.status || 'Completed' }}</div>
+          <div v-if="lastTaskResult.message" class="small">{{ lastTaskResult.message }}</div>
+          <div v-if="lastTaskResult.reminders_sent !== undefined" class="small">
+            Checked {{ lastTaskResult.slots_checked || 0 }} slots, sent {{ lastTaskResult.reminders_sent }} reminders.
+          </div>
+          <div v-if="lastTaskResult.slots_scheduled_today !== undefined" class="small">
+            Report date: {{ lastTaskResult.date }} | Scheduled slots: {{ lastTaskResult.slots_scheduled_today }} | Evaluations: {{ lastTaskResult.evaluations_completed_today }}
+          </div>
         </div>
       </div>
 

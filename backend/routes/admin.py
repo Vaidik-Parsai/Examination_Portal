@@ -3,7 +3,7 @@ Admin Routes — all endpoints protected by @roles_required('admin').
 Handles: Dashboard, Courses, Exams, Rubrics, Examiner creation.
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, date, time as dt_time
 from flask import Blueprint, request, abort
 from flask_restful import Api, Resource
 from flask_security import auth_required, roles_required, roles_accepted
@@ -11,26 +11,74 @@ from flask_security.utils import hash_password
 
 from models import (
     db, Course, Examination, Rubric, ExamSlot,
-    ExaminerProfile, StudentProfile, Booking
+    ExaminerProfile, StudentProfile, Booking, Evaluation, User
 )
 
 # Create Blueprint and Api
 admin_bp = Blueprint('admin', __name__)
 admin_api = Api(admin_bp)
 
-# --- Admin Dashboard ---
+# --- Admin Dashboard & Reports ---
 class AdminDashboardResource(Resource):
     @auth_required('token')
     @roles_required('admin')
     def get(self):
-        """Returns summary stats for the admin dashboard."""
+        """Returns comprehensive stats and examiner activity metrics."""
+        # Calculate distinct students evaluated
+        students_evaluated = db.session.query(Booking.student_id).join(
+            Evaluation, Evaluation.booking_id == Booking.id
+        ).distinct().count()
+
+        # Count examinations conducted (exams with completed slots or past date with bookings)
+        exams_conducted = Examination.query.join(ExamSlot).filter(
+            ExamSlot.status == 'completed'
+        ).distinct().count()
+
+        # Bookings breakdown by status
+        bookings_by_status = {
+            "booked": Booking.query.filter_by(status='booked').count(),
+            "rescheduled": Booking.query.filter_by(status='rescheduled').count(),
+            "completed": Booking.query.filter_by(status='completed').count(),
+            "cancelled": Booking.query.filter_by(status='cancelled').count(),
+        }
+
+        # Pending evaluations (active bookings awaiting grading)
+        pending_evaluations = Booking.query.filter(
+            Booking.status.in_(['booked', 'rescheduled'])
+        ).outerjoin(Evaluation).filter(Evaluation.id == None).count()
+
+        # Examiner activity metrics
+        examiner_activity = []
+        for ex in ExaminerProfile.query.all():
+            slots_count = ExamSlot.query.filter_by(examiner_id=ex.id).count()
+            evals_count = Evaluation.query.filter_by(examiner_id=ex.id).count()
+            pending_count = Booking.query.join(ExamSlot).filter(
+                ExamSlot.examiner_id == ex.id,
+                Booking.status.in_(['booked', 'rescheduled'])
+            ).outerjoin(Evaluation).filter(Evaluation.id == None).count()
+
+            examiner_activity.append({
+                "examiner_id": ex.id,
+                "name": ex.user.name if ex.user else f"Examiner #{ex.id}",
+                "email": ex.user.email if ex.user else "",
+                "department": ex.department or "General",
+                "status": ex.status,
+                "slots_count": slots_count,
+                "evaluations_completed": evals_count,
+                "pending_evaluations": pending_count
+            })
+
         stats = {
             "total_courses": Course.query.count(),
             "total_exams": Examination.query.count(),
+            "examinations_conducted": exams_conducted,
             "total_examiners": ExaminerProfile.query.count(),
             "total_students": StudentProfile.query.count(),
+            "students_evaluated": students_evaluated,
             "total_bookings": Booking.query.count(),
-            "pending_evaluations": Booking.query.filter_by(status='booked').count(),
+            "bookings_by_status": bookings_by_status,
+            "pending_evaluations": pending_evaluations,
+            "examiner_activity": examiner_activity
         }
         return {"message": "Admin Dashboard", "stats": stats}
 
@@ -209,7 +257,7 @@ class ExamResource(Resource):
 # --- Rubric CRUD ---
 class RubricListResource(Resource):
     @auth_required('token')
-    @roles_required('admin')
+    @roles_accepted('admin', 'examiner')
     def get(self, exam_id):
         """List all rubrics for a specific exam."""
         rubrics = Rubric.query.filter_by(examination_id=exam_id).all()
@@ -320,8 +368,24 @@ class ExaminerListResource(Resource):
         db.session.commit()
 
         return {"message": "Examiner created", "id": examiner_profile.id}, 201
+def check_examiner_overlap(examiner_id, slot_date, start_time, end_time, exclude_slot_id=None):
+    """Detect if an examiner already has an overlapping slot scheduled on that date."""
+    query = ExamSlot.query.filter(
+        ExamSlot.examiner_id == examiner_id,
+        ExamSlot.date == slot_date,
+        ExamSlot.status != 'cancelled'
+    )
+    if exclude_slot_id:
+        query = query.filter(ExamSlot.id != exclude_slot_id)
+
+    for existing in query.all():
+        if start_time < existing.end_time and end_time > existing.start_time:
+            return existing
+    return None
+
+
 class ExamSlotListResource(Resource):
-    """GET = list all slots; POST = create a new slot for an examination."""
+    """GET = list all slots for exam; POST = create a new slot."""
 
     @auth_required('token')
     @roles_required('admin')
@@ -329,16 +393,21 @@ class ExamSlotListResource(Resource):
         slots = ExamSlot.query.filter_by(examination_id=exam_id).all()
         result = []
         for s in slots:
+            examiner_user = s.examiner.user if s.examiner and s.examiner.user else None
             result.append({
                 'id': s.id,
+                'examination_id': s.examination_id,
                 'examiner_id': s.examiner_id,
+                'examiner_name': examiner_user.name if examiner_user else f"Examiner #{s.examiner_id}",
+                'examiner_department': s.examiner.department if s.examiner else "",
                 'date': s.date.isoformat(),
                 'start_time': s.start_time.isoformat(),
                 'end_time': s.end_time.isoformat(),
                 'max_capacity': s.max_capacity,
                 'available_seats': s.available_seats,
                 'status': s.status,
-                'meeting_link': s.meeting_link
+                'meeting_link': s.meeting_link,
+                'bookings_count': len(s.bookings)
             })
         return {'slots': result}
 
@@ -347,20 +416,21 @@ class ExamSlotListResource(Resource):
     def post(self, exam_id):
         from datetime import time as dt_time
         data = request.get_json(force=True)
-        # Required fields
+
         date_str = data.get('date')
         start_str = data.get('start_time')
         end_str = data.get('end_time')
         max_capacity = data.get('max_capacity')
         examiner_id = data.get('examiner_id')
+
         if not all([date_str, start_str, end_str, max_capacity, examiner_id]):
             return {"message": "date, start_time, end_time, max_capacity, examiner_id are required."}, 400
+
         exam = Examination.query.get_or_404(exam_id)
         examiner = ExaminerProfile.query.get_or_404(examiner_id)
+
         try:
-            # Parse date (e.g. "2026-10-12")
             slot_date = datetime.fromisoformat(date_str).date()
-            # Parse time — handle bare time strings like "10:00:00"
             def parse_time(t_str):
                 parts = t_str.strip().split(':')
                 parts = [int(p) for p in parts]
@@ -368,20 +438,30 @@ class ExamSlotListResource(Resource):
                     return dt_time(parts[0], parts[1])
                 elif len(parts) == 3:
                     return dt_time(parts[0], parts[1], parts[2])
-                else:
-                    raise ValueError(f"Cannot parse time: {t_str}")
+                raise ValueError(f"Cannot parse time: {t_str}")
             start_time = parse_time(start_str)
             end_time = parse_time(end_str)
         except Exception as e:
             return {"message": f"Invalid date or time format: {str(e)}"}, 400
+
+        if start_time >= end_time:
+            return {"message": "start_time must be earlier than end_time"}, 400
+
+        # Prevent examiner double-booking
+        conflict = check_examiner_overlap(examiner_id, slot_date, start_time, end_time)
+        if conflict:
+            return {
+                "message": f"Scheduling Conflict: Examiner #{examiner_id} is already booked on {slot_date} ({conflict.start_time.strftime('%H:%M')} – {conflict.end_time.strftime('%H:%M')})."
+            }, 400
+
         slot = ExamSlot(
             examination_id=exam_id,
             examiner_id=examiner_id,
             date=slot_date,
             start_time=start_time,
             end_time=end_time,
-            max_capacity=max_capacity,
-            available_seats=max_capacity,
+            max_capacity=int(max_capacity),
+            available_seats=int(max_capacity),
             status='available',
             meeting_link=data.get('meeting_link')
         )
@@ -389,45 +469,85 @@ class ExamSlotListResource(Resource):
         db.session.commit()
         return {'message': 'Slot created', 'id': slot.id}, 201
 
+
 class SlotResource(Resource):
-    """PUT = update slot; DELETE = remove slot (if no bookings)"""
+    """PUT = update/reschedule slot; DELETE = remove slot (if no bookings)"""
 
     @auth_required('token')
     @roles_required('admin')
     def put(self, slot_id):
         slot = ExamSlot.query.get_or_404(slot_id)
         data = request.get_json(force=True)
+
+        target_date = slot.date
+        target_start = slot.start_time
+        target_end = slot.end_time
+        target_examiner_id = slot.examiner_id
+
         if 'date' in data:
             try:
-                slot.date = datetime.fromisoformat(data['date']).date()
+                target_date = date.fromisoformat(str(data['date']).strip().split('T')[0])
             except Exception:
-                abort(400, 'Invalid date format')
+                abort(400, 'Invalid date format (use YYYY-MM-DD)')
         if 'start_time' in data:
             try:
-                slot.start_time = datetime.fromisoformat(data['start_time']).time()
+                t_str = str(data['start_time']).strip()
+                if len(t_str.split(':')) == 2:
+                    t_str += ':00'
+                target_start = dt_time.fromisoformat(t_str)
             except Exception:
-                abort(400, 'Invalid start_time format')
+                abort(400, 'Invalid start_time format (use HH:MM[:SS])')
         if 'end_time' in data:
             try:
-                slot.end_time = datetime.fromisoformat(data['end_time']).time()
+                t_str = str(data['end_time']).strip()
+                if len(t_str.split(':')) == 2:
+                    t_str += ':00'
+                target_end = dt_time.fromisoformat(t_str)
             except Exception:
-                abort(400, 'Invalid end_time format')
+                abort(400, 'Invalid end_time format (use HH:MM[:SS])')
+        if 'examiner_id' in data:
+            ExaminerProfile.query.get_or_404(data['examiner_id'])
+            target_examiner_id = data['examiner_id']
+
+        if target_start >= target_end:
+            abort(400, "start_time must be earlier than end_time")
+
+        # Conflict and double-booking check
+        conflict = check_examiner_overlap(
+            target_examiner_id, target_date, target_start, target_end, exclude_slot_id=slot.id
+        )
+        if conflict:
+            abort(400, f"Scheduling Conflict: Examiner #{target_examiner_id} is already scheduled on {target_date} ({conflict.start_time.strftime('%H:%M')} – {conflict.end_time.strftime('%H:%M')}).")
+
+        is_rescheduled = (target_date != slot.date) or (target_start != slot.start_time) or (target_end != slot.end_time)
+
+        slot.date = target_date
+        slot.start_time = target_start
+        slot.end_time = target_end
+        slot.examiner_id = target_examiner_id
+
         if 'max_capacity' in data:
-            new_capacity = data['max_capacity']
+            new_capacity = int(data['max_capacity'])
             booked = slot.max_capacity - slot.available_seats
             if new_capacity < booked:
                 abort(400, 'New capacity cannot be less than already booked seats')
             slot.max_capacity = new_capacity
             slot.available_seats = new_capacity - booked
-        if 'examiner_id' in data:
-            ExaminerProfile.query.get_or_404(data['examiner_id'])
-            slot.examiner_id = data['examiner_id']
         if 'status' in data:
             slot.status = data['status']
         if 'meeting_link' in data:
             slot.meeting_link = data['meeting_link']
+
+        # Notify / flag active bookings if slot was rescheduled
+        if is_rescheduled and slot.bookings:
+            notice = f"Rescheduled to {target_date.isoformat()} ({target_start.strftime('%H:%M')} – {target_end.strftime('%H:%M')})"
+            for b in slot.bookings:
+                if b.status != 'cancelled':
+                    b.status = 'rescheduled'
+                    b.reschedule_notice = notice
+
         db.session.commit()
-        return {'message': 'Slot updated'}
+        return {'message': 'Slot updated successfully', 'rescheduled': is_rescheduled}
 
     @auth_required('token')
     @roles_required('admin')
@@ -438,6 +558,134 @@ class SlotResource(Resource):
         db.session.delete(slot)
         db.session.commit()
         return {'message': 'Slot deleted'}
+
+
+class SlotToggleBookingResource(Resource):
+    """POST = Toggle slot booking open/closed"""
+
+    @auth_required('token')
+    @roles_required('admin')
+    def post(self, slot_id):
+        slot = ExamSlot.query.get_or_404(slot_id)
+        if slot.status == 'available':
+            slot.status = 'closed'
+            msg = f"Slot #{slot.id} booking closed."
+        else:
+            slot.status = 'available'
+            msg = f"Slot #{slot.id} booking opened."
+        db.session.commit()
+        return {"message": msg, "status": slot.status}
+
+
+class ExamToggleBookingResource(Resource):
+    """POST = Toggle exam booking open/closed"""
+
+    @auth_required('token')
+    @roles_required('admin')
+    def post(self, exam_id):
+        exam = Examination.query.get_or_404(exam_id)
+        if exam.status == 'closed':
+            exam.status = 'published'
+            for s in exam.slots:
+                if s.status == 'closed':
+                    s.status = 'available'
+            msg = f"Examination '{exam.name}' booking reopened."
+        else:
+            exam.status = 'closed'
+            for s in exam.slots:
+                if s.status == 'available':
+                    s.status = 'closed'
+            msg = f"Examination '{exam.name}' booking closed."
+        db.session.commit()
+        return {"message": msg, "status": exam.status}
+
+
+class AdminSearchResource(Resource):
+    """GET = Universal search across students, examiners, and examinations"""
+
+    @auth_required('token')
+    @roles_required('admin')
+    def get(self):
+        q = request.args.get('q', '').strip()
+        entity_type = request.args.get('type', 'all').lower()
+        status = request.args.get('status', '').strip().lower()
+
+        results = {"students": [], "examiners": [], "examinations": []}
+
+        # 1. Search Students
+        if entity_type in ['all', 'student', 'students']:
+            stud_query = StudentProfile.query.join(User)
+            if q:
+                filter_cond = db.or_(
+                    User.name.ilike(f'%{q}%'),
+                    User.email.ilike(f'%{q}%')
+                )
+                if q.isdigit():
+                    filter_cond = db.or_(filter_cond, StudentProfile.id == int(q), StudentProfile.user_id == int(q))
+                stud_query = stud_query.filter(filter_cond)
+            for sp in stud_query.limit(50).all():
+                results["students"].append({
+                    "id": sp.id,
+                    "user_id": sp.user_id,
+                    "name": sp.user.name if sp.user else "N/A",
+                    "email": sp.user.email if sp.user else "N/A",
+                    "active": sp.user.active if sp.user else False,
+                    "bookings_count": len(sp.bookings)
+                })
+
+        # 2. Search Examiners
+        if entity_type in ['all', 'examiner', 'examiners']:
+            ex_query = ExaminerProfile.query.join(User)
+            if q:
+                filter_cond = db.or_(
+                    User.name.ilike(f'%{q}%'),
+                    User.email.ilike(f'%{q}%'),
+                    ExaminerProfile.department.ilike(f'%{q}%')
+                )
+                if q.isdigit():
+                    filter_cond = db.or_(filter_cond, ExaminerProfile.id == int(q), ExaminerProfile.user_id == int(q))
+                ex_query = ex_query.filter(filter_cond)
+            if status:
+                ex_query = ex_query.filter(ExaminerProfile.status == status)
+            for ep in ex_query.limit(50).all():
+                results["examiners"].append({
+                    "id": ep.id,
+                    "user_id": ep.user_id,
+                    "name": ep.user.name if ep.user else "N/A",
+                    "email": ep.user.email if ep.user else "N/A",
+                    "department": ep.department or "General",
+                    "status": ep.status,
+                    "slots_count": len(ep.slots)
+                })
+
+        # 3. Search Examinations
+        if entity_type in ['all', 'examination', 'examinations', 'exam']:
+            exam_query = Examination.query.join(Course)
+            if q:
+                filter_cond = db.or_(
+                    Examination.name.ilike(f'%{q}%'),
+                    Course.name.ilike(f'%{q}%'),
+                    Course.code.ilike(f'%{q}%')
+                )
+                if q.isdigit():
+                    filter_cond = db.or_(filter_cond, Examination.id == int(q))
+                exam_query = exam_query.filter(filter_cond)
+            if status:
+                exam_query = exam_query.filter(Examination.status == status)
+            for exm in exam_query.limit(50).all():
+                results["examinations"].append({
+                    "id": exm.id,
+                    "name": exm.name,
+                    "course_code": exm.course.code if exm.course else "N/A",
+                    "course_name": exm.course.name if exm.course else "N/A",
+                    "exam_type": exm.exam_type,
+                    "duration": exm.duration,
+                    "max_marks": exm.max_marks,
+                    "status": exm.status,
+                    "slots_count": len(exm.slots)
+                })
+
+        return results
 
 class AdminExamExportResource(Resource):
     """POST = Trigger asynchronous CSV export for examination results.
@@ -498,10 +746,7 @@ class AdminTaskTriggerResource(Resource):
             return {"message": "Daily admin report task triggered", "task_id": task.id, "result": task.get() if task.ready() else None}
         else:
             abort(400, "Unknown task_name. Valid: 'reminders', 'daily-report'")
-
-# ==========================================
-# REGISTER ALL ADMIN RESOURCES
-# ==========================================
+# Resource endpoints
 admin_api.add_resource(AdminDashboardResource, '/api/admin/dashboard')
 admin_api.add_resource(CourseListResource, '/api/admin/courses')
 admin_api.add_resource(CourseResource, '/api/admin/courses/<int:course_id>')
@@ -512,5 +757,8 @@ admin_api.add_resource(RubricResource, '/api/admin/rubrics/<int:rubric_id>')
 admin_api.add_resource(ExaminerListResource, '/api/admin/examiners')
 admin_api.add_resource(ExamSlotListResource, '/api/admin/exams/<int:exam_id>/slots')
 admin_api.add_resource(SlotResource, '/api/admin/slots/<int:slot_id>')
+admin_api.add_resource(SlotToggleBookingResource, '/api/admin/slots/<int:slot_id>/toggle-booking')
+admin_api.add_resource(ExamToggleBookingResource, '/api/admin/exams/<int:exam_id>/toggle-booking')
+admin_api.add_resource(AdminSearchResource, '/api/admin/search')
 admin_api.add_resource(AdminExamExportResource, '/api/admin/exams/<int:exam_id>/export')
 admin_api.add_resource(AdminTaskTriggerResource, '/api/admin/tasks/<string:task_name>')

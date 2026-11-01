@@ -109,7 +109,8 @@ class Booking(db.Model):
     student_id = db.Column(db.Integer, db.ForeignKey('student_profiles.id'), nullable=False)
     slot_id = db.Column(db.Integer, db.ForeignKey('exam_slots.id'), nullable=False)
     booking_date = db.Column(db.DateTime, default=datetime.utcnow)
-    status = db.Column(db.String(20), default='booked')
+    status = db.Column(db.String(20), default='booked')  # booked, rescheduled, completed, cancelled
+    reschedule_notice = db.Column(db.String(255), nullable=True)
     evaluation = db.relationship('Evaluation', backref='booking', uselist=False)
 
 class Evaluation(db.Model):

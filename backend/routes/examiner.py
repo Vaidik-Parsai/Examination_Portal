@@ -1,7 +1,5 @@
 """
-Examiner Routes — Phase 4 implementation.
-Provides slot CRUD, bookings view, evaluation submission, slot completion, and examiner dashboard.
-All endpoints protected by @roles_required('examiner') and @auth_required('token').
+Examiner endpoints: slot management, bookings inspection, and student evaluations.
 """
 from datetime import datetime, date, time
 from flask import Blueprint, request, abort
@@ -77,8 +75,24 @@ class ExaminerDashboardResource(Resource):
         }
 
 
+def check_examiner_overlap(examiner_id, slot_date, start_time, end_time, exclude_slot_id=None):
+    """Detect if an examiner already has an overlapping slot scheduled on that date."""
+    query = ExamSlot.query.filter(
+        ExamSlot.examiner_id == examiner_id,
+        ExamSlot.date == slot_date,
+        ExamSlot.status != 'cancelled'
+    )
+    if exclude_slot_id:
+        query = query.filter(ExamSlot.id != exclude_slot_id)
+
+    for existing in query.all():
+        if start_time < existing.end_time and end_time > existing.start_time:
+            return existing
+    return None
+
+
 class ExaminerSlotListResource(Resource):
-    """GET = List all slots for the logged-in examiner.
+    """GET = List all slots for the logged-in examiner with rubric metadata.
        POST = Create a new slot for an examination within slot creation window."""
 
     @auth_required('token')
@@ -88,17 +102,32 @@ class ExaminerSlotListResource(Resource):
         slots = ExamSlot.query.filter_by(examiner_id=profile.id).all()
         result = []
         for s in slots:
+            exam = s.examination
+            rubrics_data = [
+                {
+                    'id': r.id,
+                    'criterion_name': r.criterion_name,
+                    'max_marks': r.max_marks,
+                    'weightage': r.weightage,
+                    'description': r.description
+                }
+                for r in (exam.rubrics if exam else [])
+            ]
+            booked_count = len([b for b in s.bookings if b.status != 'cancelled'])
             result.append({
                 'id': s.id,
                 'examination_id': s.examination_id,
-                'exam_name': s.examination.name if s.examination else None,
+                'exam_name': exam.name if exam else None,
+                'course_name': exam.course.name if exam and exam.course else None,
                 'date': s.date.isoformat(),
                 'start_time': s.start_time.isoformat(),
                 'end_time': s.end_time.isoformat(),
                 'max_capacity': s.max_capacity,
                 'available_seats': s.available_seats,
+                'booked_count': booked_count,
                 'status': s.status,
-                'meeting_link': s.meeting_link
+                'meeting_link': s.meeting_link,
+                'rubrics': rubrics_data
             })
         return {"slots": result}
 
@@ -131,6 +160,14 @@ class ExaminerSlotListResource(Resource):
         except Exception as e:
             abort(400, f"Invalid date or time format: {str(e)}. Use format (YYYY-MM-DD, HH:MM[:SS]).")
 
+        if start_time >= end_time:
+            abort(400, "start_time must be earlier than end_time.")
+
+        # Prevent double-booking for the examiner
+        conflict = check_examiner_overlap(profile.id, slot_date, start_time, end_time)
+        if conflict:
+            abort(400, f"Scheduling Conflict: You already have another slot scheduled on {slot_date} ({conflict.start_time.strftime('%H:%M')} – {conflict.end_time.strftime('%H:%M')}).")
+
         slot = ExamSlot(
             examination_id=exam.id,
             examiner_id=profile.id,
@@ -152,7 +189,7 @@ class ExaminerSlotListResource(Resource):
 
 
 class ExaminerSlotResource(Resource):
-    """PUT = Update a slot.
+    """PUT = Update a slot (allowed ONLY before student booking).
        DELETE = Delete a slot (if no bookings exist)."""
 
     @auth_required('token')
@@ -160,58 +197,92 @@ class ExaminerSlotResource(Resource):
     def put(self, slot_id):
         profile = _get_examiner_profile()
         slot = _examiner_slot_or_404(slot_id, profile.id)
+
+        # STRICT VALIDATION: Examiner can update a slot only BEFORE a student has booked it
+        active_bookings = [b for b in slot.bookings if b.status != 'cancelled']
+        if active_bookings:
+            abort(400, "Cannot edit or reschedule this slot: a student has already booked it. Contact an administrator if adjustments are required.")
+
         data = request.get_json(force=True)
+
+        target_date = slot.date
+        target_start = slot.start_time
+        target_end = slot.end_time
 
         if 'date' in data:
             try:
-                slot.date = _parse_date(data['date'])
+                target_date = _parse_date(data['date'])
             except Exception:
                 abort(400, "Invalid date format.")
         if 'start_time' in data:
             try:
-                slot.start_time = _parse_time(data['start_time'])
+                target_start = _parse_time(data['start_time'])
             except Exception:
                 abort(400, "Invalid start_time format.")
         if 'end_time' in data:
             try:
-                slot.end_time = _parse_time(data['end_time'])
+                target_end = _parse_time(data['end_time'])
             except Exception:
                 abort(400, "Invalid end_time format.")
+
+        if target_start >= target_end:
+            abort(400, "start_time must be earlier than end_time.")
+
+        # Prevent double-booking
+        conflict = check_examiner_overlap(profile.id, target_date, target_start, target_end, exclude_slot_id=slot.id)
+        if conflict:
+            abort(400, f"Scheduling Conflict: You already have another slot scheduled on {target_date} ({conflict.start_time.strftime('%H:%M')} – {conflict.end_time.strftime('%H:%M')}).")
+
+        slot.date = target_date
+        slot.start_time = target_start
+        slot.end_time = target_end
+
         if 'max_capacity' in data:
             new_capacity = int(data['max_capacity'])
-            booked = slot.max_capacity - slot.available_seats
-            if new_capacity < booked:
-                abort(400, "New capacity cannot be less than already booked seats.")
             slot.max_capacity = new_capacity
-            slot.available_seats = new_capacity - booked
+            slot.available_seats = new_capacity
         if 'meeting_link' in data:
             slot.meeting_link = data['meeting_link']
         if 'status' in data:
             slot.status = data['status']
 
         db.session.commit()
-        return {"message": "Slot updated"}
+        return {"message": "Slot updated successfully"}
 
     @auth_required('token')
     @roles_required('examiner')
     def delete(self, slot_id):
         profile = _get_examiner_profile()
         slot = _examiner_slot_or_404(slot_id, profile.id)
-        if slot.bookings:
-            abort(400, "Cannot delete a slot with existing bookings.")
+        active_bookings = [b for b in slot.bookings if b.status != 'cancelled']
+        if active_bookings:
+            abort(400, "Cannot delete a slot with existing student bookings.")
         db.session.delete(slot)
         db.session.commit()
         return {"message": "Slot deleted"}
 
 
 class ExaminerSlotBookingsResource(Resource):
-    """GET = List all student bookings for an examiner's slot."""
+    """GET = List all student bookings for an examiner's slot with full rubrics metadata."""
 
     @auth_required('token')
     @roles_required('examiner')
     def get(self, slot_id):
         profile = _get_examiner_profile()
         slot = _examiner_slot_or_404(slot_id, profile.id)
+        exam = slot.examination
+
+        # Expose rubrics for this subject/exam to the examiner
+        rubrics_data = [
+            {
+                "id": r.id,
+                "criterion_name": r.criterion_name,
+                "max_marks": r.max_marks,
+                "weightage": r.weightage,
+                "description": r.description
+            }
+            for r in (exam.rubrics if exam else [])
+        ]
 
         bookings_data = []
         for b in slot.bookings:
@@ -223,6 +294,7 @@ class ExaminerSlotBookingsResource(Resource):
                 "student_email": student_user.email if student_user else None,
                 "booking_date": b.booking_date.isoformat() if b.booking_date else None,
                 "status": b.status,
+                "reschedule_notice": getattr(b, 'reschedule_notice', None),
                 "evaluation": {
                     "id": b.evaluation.id,
                     "total_marks": b.evaluation.total_marks,
@@ -231,7 +303,24 @@ class ExaminerSlotBookingsResource(Resource):
                 } if b.evaluation else None
             })
 
-        return {"bookings": bookings_data}
+        return {
+            "slot": {
+                "id": slot.id,
+                "examination_id": slot.examination_id,
+                "exam_name": exam.name if exam else "Unknown Exam",
+                "course_name": exam.course.name if exam and exam.course else "Unknown Course",
+                "exam_type": exam.exam_type if exam else "",
+                "duration": exam.duration if exam else 0,
+                "max_marks": exam.max_marks if exam else 100,
+                "date": slot.date.isoformat(),
+                "start_time": slot.start_time.isoformat(),
+                "end_time": slot.end_time.isoformat(),
+                "status": slot.status,
+                "meeting_link": slot.meeting_link
+            },
+            "rubrics": rubrics_data,
+            "bookings": bookings_data
+        }
 
 
 class EvaluationSubmitResource(Resource):
@@ -305,7 +394,7 @@ class SlotCompleteResource(Resource):
 
 
 class ExaminerExamListResource(Resource):
-    """GET = List all examinations available for scheduling slots."""
+    """GET = List all examinations available for scheduling slots with their rubrics."""
 
     @auth_required('token')
     @roles_required('examiner')
@@ -313,6 +402,16 @@ class ExaminerExamListResource(Resource):
         exams = Examination.query.all()
         result = []
         for e in exams:
+            rubrics_data = [
+                {
+                    "id": r.id,
+                    "criterion_name": r.criterion_name,
+                    "max_marks": r.max_marks,
+                    "weightage": r.weightage,
+                    "description": r.description
+                }
+                for r in e.rubrics
+            ]
             result.append({
                 "id": e.id,
                 "course_id": e.course_id,
@@ -325,14 +424,41 @@ class ExaminerExamListResource(Resource):
                 "slot_creation_end": str(e.slot_creation_end) if e.slot_creation_end else None,
                 "booking_start": str(e.booking_start) if e.booking_start else None,
                 "booking_end": str(e.booking_end) if e.booking_end else None,
-                "status": e.status
+                "status": e.status,
+                "rubrics": rubrics_data
             })
         return {"exams": result}
+
+
+class ExaminerExamRubricsResource(Resource):
+    """GET = Retrieve evaluation rubrics for an examination."""
+
+    @auth_required('token')
+    @roles_required('examiner')
+    def get(self, exam_id):
+        exam = Examination.query.get_or_404(exam_id)
+        rubrics = [
+            {
+                "id": r.id,
+                "criterion_name": r.criterion_name,
+                "max_marks": r.max_marks,
+                "weightage": r.weightage,
+                "description": r.description
+            }
+            for r in exam.rubrics
+        ]
+        return {
+            "examination_id": exam.id,
+            "examination_name": exam.name,
+            "max_marks": exam.max_marks,
+            "rubrics": rubrics
+        }
 
 
 # Register all examiner resources
 examiner_api.add_resource(ExaminerDashboardResource, '/dashboard')
 examiner_api.add_resource(ExaminerExamListResource, '/exams')
+examiner_api.add_resource(ExaminerExamRubricsResource, '/exams/<int:exam_id>/rubrics')
 examiner_api.add_resource(ExaminerSlotListResource, '/slots')
 examiner_api.add_resource(ExaminerSlotResource, '/slots/<int:slot_id>')
 examiner_api.add_resource(ExaminerSlotBookingsResource, '/slots/<int:slot_id>/bookings')

@@ -1,9 +1,5 @@
 """
-Celery Background Tasks — Phase 7 implementation.
-Includes:
-1. send_slot_reminders — sends upcoming exam reminders to students and examiners (24h prior)
-2. generate_daily_admin_report — daily activity summary (bookings, exams, evaluations)
-3. export_exam_results_csv — asynchronous CSV export of exam evaluations
+Background tasks for exam reminders, daily activity reporting, and CSV exports.
 """
 import os
 import csv
