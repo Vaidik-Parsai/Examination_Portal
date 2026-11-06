@@ -35,6 +35,14 @@ class Config:
     CELERY_RESULT_BACKEND = REDIS_URL
     CELERY_TASK_ALWAYS_EAGER = os.getenv('CELERY_ALWAYS_EAGER', 'True').lower() == 'true'
 
+    # Mail config — defaults to MailHog for local dev (smtp port 1025)
+    MAIL_SERVER = os.getenv('MAIL_SERVER', 'localhost')
+    MAIL_PORT = int(os.getenv('MAIL_PORT', 1025))
+    MAIL_USERNAME = os.getenv('MAIL_USERNAME', '')
+    MAIL_PASSWORD = os.getenv('MAIL_PASSWORD', '')
+    MAIL_DEFAULT_SENDER = os.getenv('MAIL_DEFAULT_SENDER', 'noreply@examportal.local')
+    ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', 'admin@example.com')
+
 
 app = Flask(__name__)
 app.config.from_object(Config)

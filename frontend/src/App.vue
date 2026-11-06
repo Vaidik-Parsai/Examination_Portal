@@ -26,7 +26,7 @@
 
         <!-- Examiner Navigation -->
         <template v-else-if="auth.hasRole('examiner')">
-          <router-link to="/examiner/dashboard" class="nav-link">Examiner Hub</router-link>
+          <router-link to="/examiner/dashboard" class="nav-link">My Slots</router-link>
         </template>
 
         <!-- Student Navigation -->
@@ -35,6 +35,7 @@
           <router-link to="/student/slots" class="nav-link">Available Slots</router-link>
           <router-link to="/student/bookings" class="nav-link">My Bookings</router-link>
           <router-link to="/student/evaluations" class="nav-link">Results</router-link>
+          <router-link to="/student/profile" class="nav-link">My Profile</router-link>
         </template>
       </nav>
 

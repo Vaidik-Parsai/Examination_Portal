@@ -2,6 +2,19 @@
    Simple, Clean, Student-Style Examination Portal Stylesheet
    =================================================================== */
 
+:root {
+  --primary: #0d6efd;
+  --danger: #dc3545;
+  --success: #198754;
+  --warning: #ffc107;
+  --info: #0dcaf0;
+  --text-muted: #6c757d;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --success-bg: #d1e7dd;
+  --danger-bg: #f8d7da;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

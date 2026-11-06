@@ -13,11 +13,29 @@
       {{ feedback.text }}
     </div>
 
+    <!-- Search / Filter Bar -->
+    <div class="simple-card filter-bar">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Search by Examiner Name</label>
+          <input v-model="filterExaminer" type="text" class="form-input" placeholder="e.g. Dr. Sharma" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Search by Subject / Exam</label>
+          <input v-model="filterSubject" type="text" class="form-input" placeholder="e.g. Data Structures" />
+        </div>
+        <div class="form-group filter-action">
+          <button @click="applyFilter" class="btn btn-primary">Search</button>
+          <button @click="clearFilter" class="btn btn-secondary">Clear</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Slots Table -->
-    <div class="table-container glass-card">
+    <div class="simple-card table-container">
       <div v-if="loading" class="table-empty">Finding available slots...</div>
-      <div v-else-if="slots.length === 0" class="table-empty">
-        No open examination slots available at the moment. Please check back later.
+      <div v-else-if="filteredSlots.length === 0" class="table-empty">
+        No open examination slots found. Try different filters or check back later.
       </div>
       <table v-else class="data-table">
         <thead>
@@ -25,21 +43,23 @@
             <th>Course</th>
             <th>Examination</th>
             <th>Examiner</th>
+            <th>Department</th>
             <th>Date</th>
-            <th>Time Window</th>
+            <th>Time</th>
             <th>Seats Left</th>
             <th>Action</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="s in slots" :key="s.id">
+          <tr v-for="s in filteredSlots" :key="s.id">
             <td><strong>{{ s.course_name || '—' }}</strong></td>
             <td>{{ s.exam_name }}</td>
             <td>{{ s.examiner_name ? `Prof. ${s.examiner_name}` : 'Faculty Examiner' }}</td>
+            <td>{{ s.examiner_department || '—' }}</td>
             <td>{{ s.date }}</td>
             <td>{{ s.start_time }} – {{ s.end_time }}</td>
             <td>
-              <span class="badge badge-success">{{ s.available_seats }} / {{ s.max_capacity }} seats</span>
+              <span class="badge badge-success">{{ s.available_seats }} / {{ s.max_capacity }}</span>
             </td>
             <td>
               <button
@@ -47,7 +67,7 @@
                 class="btn btn-primary btn-sm"
                 :disabled="bookingSlotId === s.id"
               >
-                {{ bookingSlotId === s.id ? 'Reserving...' : 'Book This Slot' }}
+                {{ bookingSlotId === s.id ? 'Reserving...' : 'Book Slot' }}
               </button>
             </td>
           </tr>
@@ -58,19 +78,36 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { api } from '../../services/api';
 
 const slots = ref([]);
 const loading = ref(true);
 const bookingSlotId = ref(null);
+const filterExaminer = ref('');
+const filterSubject = ref('');
+const activeExaminer = ref('');
+const activeSubject = ref('');
 
 const feedback = reactive({ text: '', isError: false });
 const showFeedback = (text, isError = false) => {
   feedback.text = text;
   feedback.isError = isError;
-  setTimeout(() => { feedback.text = ''; }, 4000);
+  setTimeout(() => { feedback.text = ''; }, 5000);
 };
+
+const filteredSlots = computed(() => {
+  if (!activeExaminer.value && !activeSubject.value) return slots.value;
+  const eq = activeExaminer.value.toLowerCase();
+  const sq = activeSubject.value.toLowerCase();
+  return slots.value.filter(s => {
+    const matchEx = !eq || (s.examiner_name || '').toLowerCase().includes(eq);
+    const matchSub = !sq ||
+      (s.exam_name || '').toLowerCase().includes(sq) ||
+      (s.course_name || '').toLowerCase().includes(sq);
+    return matchEx && matchSub;
+  });
+});
 
 const loadSlots = async () => {
   loading.value = true;
@@ -82,6 +119,18 @@ const loadSlots = async () => {
   } finally {
     loading.value = false;
   }
+};
+
+const applyFilter = () => {
+  activeExaminer.value = filterExaminer.value.trim();
+  activeSubject.value = filterSubject.value.trim();
+};
+
+const clearFilter = () => {
+  filterExaminer.value = '';
+  filterSubject.value = '';
+  activeExaminer.value = '';
+  activeSubject.value = '';
 };
 
 const bookSlot = async (slotId) => {
@@ -98,9 +147,7 @@ const bookSlot = async (slotId) => {
   }
 };
 
-onMounted(() => {
-  loadSlots();
-});
+onMounted(() => { loadSlots(); });
 </script>
 
 <style scoped>
@@ -108,32 +155,18 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
   flex-wrap: wrap;
   gap: 1rem;
 }
 
-.table-empty {
-  text-align: center;
-  padding: 3rem;
-  color: var(--text-muted);
+.filter-bar { margin-bottom: 1rem; }
+
+.filter-action {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
 }
 
-.alert {
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-md);
-  margin-bottom: 1.5rem;
-}
-
-.alert-success {
-  background: var(--success-bg);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  color: #a7f3d0;
-}
-
-.alert-error {
-  background: var(--danger-bg);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  color: #fca5a5;
-}
+.table-empty { text-align: center; padding: 3rem; color: #6c757d; }
 </style>

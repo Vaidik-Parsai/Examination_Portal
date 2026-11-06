@@ -39,6 +39,26 @@
           </button>
         </div>
 
+        <div class="task-action-box">
+          <div>
+            <strong>3. Monthly Examination Report</strong>
+            <p class="text-muted">Compiles the previous month's statistics (exams conducted, students evaluated, top examiners) and emails the report to the admin. Use year/month fields to test a specific month.</p>
+            <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+              <div class="form-group" style="margin:0;">
+                <label class="form-label">Year (optional)</label>
+                <input v-model="monthlyYear" type="number" min="2020" max="2100" class="form-input" style="width:100px;" placeholder="e.g. 2026" />
+              </div>
+              <div class="form-group" style="margin:0;">
+                <label class="form-label">Month (optional)</label>
+                <input v-model="monthlyMonth" type="number" min="1" max="12" class="form-input" style="width:80px;" placeholder="1–12" />
+              </div>
+            </div>
+          </div>
+          <button @click="triggerMonthlyReport" class="btn btn-primary btn-sm" :disabled="triggeringMonthly">
+            {{ triggeringMonthly ? 'Generating...' : 'Generate Monthly Report' }}
+          </button>
+        </div>
+
         <!-- Task Log Output -->
         <div v-if="lastTaskResult" class="alert alert-info py-2 px-3 mt-3">
           <div class="fw-bold mb-1">Execution Status: {{ lastTaskResult.status || 'Completed' }}</div>
@@ -102,8 +122,11 @@ const lastTaskResult = ref(null);
 
 const triggeringReminders = ref(false);
 const triggeringReport = ref(false);
+const triggeringMonthly = ref(false);
 const exporting = ref(false);
 const loadingExports = ref(false);
+const monthlyYear = ref('');
+const monthlyMonth = ref('');
 
 const feedback = reactive({ text: '', isError: false });
 const showFeedback = (text, isError = false) => {
@@ -165,6 +188,24 @@ const triggerExport = async () => {
     showFeedback(err.message || 'Export failed.', true);
   } finally {
     exporting.value = false;
+  }
+};
+
+const triggerMonthlyReport = async () => {
+  triggeringMonthly.value = true;
+  try {
+    let url = '/api/admin/tasks/monthly-report';
+    const params = [];
+    if (monthlyYear.value) params.push(`year=${monthlyYear.value}`);
+    if (monthlyMonth.value) params.push(`month=${monthlyMonth.value}`);
+    if (params.length) url += '?' + params.join('&');
+    const res = await api.post(url, {});
+    lastTaskResult.value = res.result || res;
+    showFeedback(res.message || 'Monthly report generated successfully.');
+  } catch (err) {
+    showFeedback(err.message || 'Monthly report task failed.', true);
+  } finally {
+    triggeringMonthly.value = false;
   }
 };
 

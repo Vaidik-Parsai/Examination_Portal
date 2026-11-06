@@ -732,20 +732,26 @@ class AdminExamExportResource(Resource):
         }
 
 class AdminTaskTriggerResource(Resource):
-    """POST = Manually trigger Celery background tasks (reminders or daily report)."""
+    """POST = Manually trigger Celery background tasks (reminders, daily report, monthly report)."""
 
     @auth_required('token')
     @roles_required('admin')
     def post(self, task_name):
-        from tasks import send_slot_reminders, generate_daily_admin_report
+        from tasks import send_slot_reminders, generate_daily_admin_report, generate_monthly_exam_report
         if task_name == 'reminders':
             task = send_slot_reminders.delay()
             return {"message": "Slot reminders task triggered", "task_id": task.id, "result": task.get() if task.ready() else None}
         elif task_name == 'daily-report':
             task = generate_daily_admin_report.delay()
             return {"message": "Daily admin report task triggered", "task_id": task.id, "result": task.get() if task.ready() else None}
+        elif task_name == 'monthly-report':
+            # Optionally accept ?year=YYYY&month=MM query params for testing
+            year = request.args.get('year', type=int)
+            month = request.args.get('month', type=int)
+            task = generate_monthly_exam_report.delay(year=year, month=month)
+            return {"message": "Monthly exam report task triggered", "task_id": task.id, "result": task.get() if task.ready() else None}
         else:
-            abort(400, "Unknown task_name. Valid: 'reminders', 'daily-report'")
+            abort(400, "Unknown task_name. Valid: 'reminders', 'daily-report', 'monthly-report'")
 # Resource endpoints
 admin_api.add_resource(AdminDashboardResource, '/api/admin/dashboard')
 admin_api.add_resource(CourseListResource, '/api/admin/courses')

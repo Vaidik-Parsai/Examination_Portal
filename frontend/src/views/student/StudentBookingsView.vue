@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">My Reserved Examination Slots</h1>
-        <p class="page-subtitle">Track your upcoming viva sessions and access online meeting links</p>
+        <p class="page-subtitle">Track your upcoming viva sessions and access meeting links</p>
       </div>
       <router-link to="/student/slots" class="btn btn-primary btn-sm">+ Book Another Slot</router-link>
     </div>
@@ -14,23 +14,23 @@
     </div>
 
     <!-- Bookings Table -->
-    <div class="table-container glass-card">
+    <div class="simple-card table-container">
       <div v-if="loading" class="table-empty">Loading your bookings...</div>
       <div v-else-if="bookings.length === 0" class="table-empty">
         You haven't booked any examination slots yet.
-        <router-link to="/student/slots" class="booking-cta">Browse available slots →</router-link>
+        <router-link to="/student/slots" style="display:block; margin-top:8px; font-weight:600;">Browse available slots →</router-link>
       </div>
       <table v-else class="data-table">
         <thead>
           <tr>
-            <th>Booking ID</th>
+            <th>ID</th>
             <th>Course</th>
             <th>Examination</th>
             <th>Exam Date</th>
-            <th>Timing</th>
+            <th>Time</th>
             <th>Meeting Link</th>
             <th>Status</th>
-            <th>Result</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -38,24 +38,34 @@
             <td>#{{ b.id }}</td>
             <td><strong>{{ b.course_name || '—' }}</strong></td>
             <td>{{ b.exam_name || 'Assessment' }}</td>
-            <td>{{ b.date }}</td>
+            <td>{{ b.date || '—' }}</td>
             <td>{{ b.start_time }} – {{ b.end_time }}</td>
             <td>
-              <a v-if="b.meeting_link" :href="b.meeting_link" target="_blank" rel="noopener" class="meeting-btn">
-                🎥 Join Meeting ↗
+              <a v-if="b.meeting_link" :href="b.meeting_link" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">
+                🎥 Join
               </a>
-              <span v-else class="text-faint">Will be provided</span>
+              <span v-else class="text-muted">TBD</span>
             </td>
             <td>
-              <span :class="['badge', b.status === 'completed' ? 'badge-success' : 'badge-student']">
-                {{ b.status }}
-              </span>
+              <span :class="['badge', statusBadge(b.status)]">{{ b.status }}</span>
+              <div v-if="b.reschedule_notice" class="reschedule-notice">
+                📌 {{ b.reschedule_notice }}
+              </div>
             </td>
             <td>
               <router-link v-if="b.status === 'completed'" to="/student/evaluations" class="btn btn-secondary btn-sm">
-                View Result 🏆
+                View Result
               </router-link>
-              <span v-else class="text-faint">—</span>
+              <div v-else-if="b.status === 'booked'">
+                <button
+                  v-if="b.can_cancel"
+                  @click="cancelBooking(b.id)"
+                  class="btn btn-danger btn-sm"
+                  title="Cancel this booking"
+                >Cancel</button>
+                <span v-else class="text-muted small" :title="b.cancel_deadline_msg">⏱ Deadline passed</span>
+              </div>
+              <span v-else class="text-muted">—</span>
             </td>
           </tr>
         </tbody>
@@ -75,7 +85,14 @@ const feedback = reactive({ text: '', isError: false });
 const showFeedback = (text, isError = false) => {
   feedback.text = text;
   feedback.isError = isError;
-  setTimeout(() => { feedback.text = ''; }, 4000);
+  setTimeout(() => { feedback.text = ''; }, 5000);
+};
+
+const statusBadge = (status) => {
+  if (status === 'completed') return 'badge-success';
+  if (status === 'cancelled') return 'badge-danger';
+  if (status === 'rescheduled') return 'badge-warning';
+  return 'badge-student';
 };
 
 const loadBookings = async () => {
@@ -90,9 +107,18 @@ const loadBookings = async () => {
   }
 };
 
-onMounted(() => {
-  loadBookings();
-});
+const cancelBooking = async (bookingId) => {
+  if (!confirm('Are you sure you want to cancel this booking? The seat will be released back.')) return;
+  try {
+    const res = await api.delete(`/api/student/bookings/${bookingId}/cancel`);
+    showFeedback(res.message || 'Booking cancelled.');
+    loadBookings();
+  } catch (err) {
+    showFeedback(err.message || 'Failed to cancel booking.', true);
+  }
+};
+
+onMounted(() => { loadBookings(); });
 </script>
 
 <style scoped>
@@ -100,54 +126,23 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
   flex-wrap: wrap;
   gap: 1rem;
 }
 
-.table-empty {
-  text-align: center;
-  padding: 3rem;
-  color: var(--text-muted);
+.text-muted { color: #6c757d; }
+.small { font-size: 12px; }
+.table-empty { text-align: center; padding: 3rem; color: #6c757d; }
+
+.reschedule-notice {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #664d03;
+  background: #fff3cd;
+  padding: 2px 6px;
+  border-radius: 3px;
 }
 
-.booking-cta {
-  display: block;
-  margin-top: 0.5rem;
-  font-weight: 600;
-}
-
-.meeting-btn {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.35rem 0.75rem;
-  background: rgba(56, 189, 248, 0.15);
-  border: 1px solid rgba(56, 189, 248, 0.3);
-  border-radius: var(--radius-sm);
-  color: var(--info);
-  font-weight: 500;
-  font-size: 0.85rem;
-}
-
-.meeting-btn:hover {
-  background: rgba(56, 189, 248, 0.25);
-}
-
-.alert {
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-md);
-  margin-bottom: 1.5rem;
-}
-
-.alert-success {
-  background: var(--success-bg);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  color: #a7f3d0;
-}
-
-.alert-error {
-  background: var(--danger-bg);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  color: #fca5a5;
-}
+.badge-danger { background-color: #f8d7da; color: #842029; }
 </style>

@@ -23,6 +23,7 @@ import StudentDashboardView from '../views/student/StudentDashboardView.vue';
 import StudentSlotsView from '../views/student/StudentSlotsView.vue';
 import StudentBookingsView from '../views/student/StudentBookingsView.vue';
 import StudentEvaluationsView from '../views/student/StudentEvaluationsView.vue';
+import StudentProfileView from '../views/student/StudentProfileView.vue';
 
 const routes = [
   { path: '/', name: 'Home', component: HomeView },
@@ -104,6 +105,12 @@ const routes = [
     path: '/student/evaluations',
     name: 'StudentEvaluations',
     component: StudentEvaluationsView,
+    meta: { requiresAuth: true, role: 'student' }
+  },
+  {
+    path: '/student/profile',
+    name: 'StudentProfile',
+    component: StudentProfileView,
     meta: { requiresAuth: true, role: 'student' }
   },
 

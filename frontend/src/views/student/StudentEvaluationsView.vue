@@ -38,7 +38,7 @@
             </td>
             <td>{{ e.examiner_name ? `Prof. ${e.examiner_name}` : `Examiner #${e.examiner_id || ''}` }}</td>
             <td>
-              <span class="marks-pill">{{ e.total_marks }} pts</span>
+              <span class="marks-pill">{{ e.total_marks }} / {{ e.max_marks ?? '?' }}</span>
             </td>
             <td>
               <div class="remarks-cell">
